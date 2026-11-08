@@ -115,6 +115,12 @@ Triage of the 8 open CodeQL alerts on BuildBandits/tools-collection.
       so `$(...)`, backticks and `$VAR` in a Compose value were expanded by the
       shell when the generated command was pasted. Fix: POSIX single quotes,
       `'` written as `'\''`. Verified by running the output through `sh`.
+      Review follow-up (2026-11-08): restart, mem_limit, cpus, stop_signal,
+      pid, ipc, dns, dns_search, cap_add/drop, expose, log driver, ulimits,
+      sysctls, the image and a string command were still emitted raw; all now
+      go through `shellQuote` (string command split with `tokenize`, as
+      Compose does). Mapping keys from --log-opt / --sysctl quoted via
+      `yamlKey`.
 - [x] #1, #2 `actions/missing-workflow-permissions` in `ci.yml` — workflow-level
       `permissions: contents: read`; no job pushes, comments or writes.
 - [x] #8 `js/incomplete-url-substring-sanitization` in

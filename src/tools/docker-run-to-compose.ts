@@ -382,6 +382,12 @@ function yamlQuoted(value: string): string {
   return JSON.stringify(value)
 }
 
+// Mapping keys come from user input too (--log-opt, --sysctl): quote any key
+// that is not a plain identifier-like token, or `a: b` / `#x` breaks the YAML.
+function yamlKey(key: string): string {
+  return /^[A-Za-z0-9_][A-Za-z0-9_./-]*$/.test(key) ? key : yamlQuoted(key)
+}
+
 export function configToCompose(cfg: DockerRunConfig): string {
   const serviceName = cfg.containerName || serviceNameFromImage(cfg.image)
   const lines: string[] = ['services:']
@@ -467,12 +473,12 @@ export function configToCompose(cfg: DockerRunConfig): string {
 
   if (cfg.logDriver) {
     body.push('    logging:')
-    body.push(`      driver: ${cfg.logDriver}`)
+    body.push(yamlScalar('driver', cfg.logDriver, '      '))
     if (cfg.logOpts.length) {
       body.push('      options:')
       for (const opt of cfg.logOpts) {
         const [k, v] = splitOnce(opt, '=')
-        body.push(`        ${k}: ${yamlQuoted(v)}`)
+        body.push(`        ${yamlKey(k)}: ${yamlQuoted(v)}`)
       }
     }
   }
@@ -503,7 +509,7 @@ export function configToCompose(cfg: DockerRunConfig): string {
     body.push('    sysctls:')
     for (const s of cfg.sysctls) {
       const [k = '', v = ''] = s.split('=')
-      body.push(`      ${k}: ${yamlQuoted(v)}`)
+      body.push(`      ${yamlKey(k)}: ${yamlQuoted(v)}`)
     }
   }
 
@@ -596,37 +602,37 @@ function serviceToDockerRun(name: string, svc: Record<string, MaybeJsonValue>): 
   if (containerName) parts.push('--name', shellQuote(containerName))
   else if (name) parts.push('--name', shellQuote(name))
 
-  if (restart) parts.push('--restart', restart)
+  if (restart) parts.push('--restart', shellQuote(restart))
   if (hostname) parts.push('--hostname', shellQuote(hostname))
   if (user) parts.push('-u', shellQuote(user))
   if (workdir) parts.push('-w', shellQuote(workdir))
   if (entrypoint) parts.push('--entrypoint', shellQuote(entrypoint))
-  if (memLimit) parts.push('-m', memLimit)
-  if (cpus) parts.push('--cpus', cpus)
+  if (memLimit) parts.push('-m', shellQuote(memLimit))
+  if (cpus) parts.push('--cpus', shellQuote(cpus))
   if (shmSize) parts.push('--shm-size', shellQuote(shmSize))
-  if (stopSignal) parts.push('--stop-signal', stopSignal)
-  if (pid) parts.push('--pid', pid)
-  if (ipc) parts.push('--ipc', ipc)
+  if (stopSignal) parts.push('--stop-signal', shellQuote(stopSignal))
+  if (pid) parts.push('--pid', shellQuote(pid))
+  if (ipc) parts.push('--ipc', shellQuote(ipc))
 
   for (const p of listValues(svc['ports'])) parts.push('-p', shellQuote(str(p)))
   for (const v of listValues(svc['volumes'])) parts.push('-v', shellQuote(str(v)))
   for (const e of environmentEntries(svc['environment'])) parts.push('-e', shellQuote(e))
   for (const f of listValues(svc['env_file'])) parts.push('--env-file', shellQuote(str(f)))
   for (const n of listValues(svc['networks'])) parts.push('--network', shellQuote(str(n)))
-  for (const d of arr(svc['dns'])) parts.push('--dns', str(d))
-  for (const d of arr(svc['dns_search'])) parts.push('--dns-search', str(d))
+  for (const d of arr(svc['dns'])) parts.push('--dns', shellQuote(str(d)))
+  for (const d of arr(svc['dns_search'])) parts.push('--dns-search', shellQuote(str(d)))
   for (const h of arr(svc['extra_hosts'])) parts.push('--add-host', shellQuote(str(h)))
-  for (const c of arr(svc['cap_add'])) parts.push('--cap-add', str(c))
-  for (const c of arr(svc['cap_drop'])) parts.push('--cap-drop', str(c))
+  for (const c of arr(svc['cap_add'])) parts.push('--cap-add', shellQuote(str(c)))
+  for (const c of arr(svc['cap_drop'])) parts.push('--cap-drop', shellQuote(str(c)))
   for (const d of arr(svc['devices'])) parts.push('--device', shellQuote(str(d)))
   for (const l of arr(svc['labels'])) parts.push('-l', shellQuote(str(l)))
   for (const t of arr(svc['tmpfs'])) parts.push('--tmpfs', shellQuote(str(t)))
-  for (const e of arr(svc['expose'])) parts.push('--expose', str(e))
+  for (const e of arr(svc['expose'])) parts.push('--expose', shellQuote(str(e)))
   for (const s of arr(svc['security_opt'])) parts.push('--security-opt', shellQuote(str(s)))
 
   const logging = obj(svc['logging'])
   if (logging['driver']) {
-    parts.push('--log-driver', str(logging['driver']))
+    parts.push('--log-driver', shellQuote(str(logging['driver'])))
     const opts = obj(logging['options'])
     for (const [k, v] of Object.entries(opts)) {
       parts.push('--log-opt', shellQuote(`${k}=${str(v)}`))
@@ -636,34 +642,37 @@ function serviceToDockerRun(name: string, svc: Record<string, MaybeJsonValue>): 
   const ulimits = obj(svc['ulimits'])
   for (const [uname, uval] of Object.entries(ulimits)) {
     if (typeof uval === 'number') {
-      parts.push('--ulimit', `${uname}=${uval}`)
+      parts.push('--ulimit', shellQuote(`${uname}=${uval}`))
     } else if (typeof uval === 'string') {
-      parts.push('--ulimit', `${uname}=${uval}`)
+      parts.push('--ulimit', shellQuote(`${uname}=${uval}`))
     } else {
       const u = obj(uval)
       if (u['soft'] !== undefined && u['hard'] !== undefined) {
-        parts.push('--ulimit', `${uname}=${str(u['soft'])}:${str(u['hard'])}`)
+        parts.push('--ulimit', shellQuote(`${uname}=${str(u['soft'])}:${str(u['hard'])}`))
       } else if (u['soft'] !== undefined) {
-        parts.push('--ulimit', `${uname}=${str(u['soft'])}`)
+        parts.push('--ulimit', shellQuote(`${uname}=${str(u['soft'])}`))
       } else if (u['hard'] !== undefined) {
-        parts.push('--ulimit', `${uname}=${str(u['hard'])}`)
+        parts.push('--ulimit', shellQuote(`${uname}=${str(u['hard'])}`))
       }
     }
   }
 
   const sysctls = obj(svc['sysctls'])
   for (const [k, v] of Object.entries(sysctls)) {
-    parts.push('--sysctl', `${k}=${str(v)}`)
+    parts.push('--sysctl', shellQuote(`${k}=${str(v)}`))
   }
 
-  if (!image) return `# Service "${name}" has no image defined`
-  parts.push(image)
+  // JSON.stringify keeps a newline in the service name from ending the comment.
+  if (!image) return `# Service ${JSON.stringify(name)} has no image defined`
+  parts.push(shellQuote(image))
 
   const command = svc['command']
   if (Array.isArray(command)) {
     for (const c of command) parts.push(shellQuote(str(c)))
   } else if (typeof command === 'string' && command) {
-    parts.push(command)
+    // Compose splits a string command shell-style and runs it without a shell,
+    // so split it the same way and quote each word instead of emitting it raw.
+    for (const c of tokenize(command)) parts.push(shellQuote(c))
   }
 
   return parts.join(' \\\n  ')
